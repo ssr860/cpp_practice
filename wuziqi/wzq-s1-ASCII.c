@@ -5,7 +5,9 @@
 #define CHARSIZE 2
 void initRecordBorard(void);
 void innerLayoutToDisplayArray(void);
+
 void displayBoard(void);
+int currentPlayer = 1;
 
 //棋盘使用的是ASCII编码，每一个位置包含一个空格和一个字符，因此占2个字节。
 
@@ -37,41 +39,138 @@ char play1CurrentPic='+';
 char play2Pic='o';//白棋子;
 char play2CurrentPic='*';
 
+int col, row;
+
+void input(void){
+	printf("Player%i: ",currentPlayer);
+	scanf("%d %d",&row, &col);
+	row --;
+	col --;
+}
+
 //此数组用于记录当前的棋盘的格局 
 int arrayForInnerBoardLayout[SIZE][SIZE];
 
-int main()
-
-{
-
-    initRecordBorard();    //初始化一个空棋盘
-
-    arrayForInnerBoardLayout[0][0]=1;    //在棋盘的左上角落一个黑色棋子
-    innerLayoutToDisplayArray();  //将心中的棋盘转成用于显示的棋盘
-    displayBoard();          //显示棋盘
-    getchar();   
-
-    arrayForInnerBoardLayout[5][9]=2;
-    innerLayoutToDisplayArray();
-    displayBoard();
-    getchar();
-
-    arrayForInnerBoardLayout[3][4]=2;
-    innerLayoutToDisplayArray();
-    displayBoard();
-    getchar();
-
-    arrayForInnerBoardLayout[6][1]=1;
-    innerLayoutToDisplayArray();
-    displayBoard();
-    getchar();
-
-    arrayForInnerBoardLayout[9][4]=2;
-    innerLayoutToDisplayArray();
-    displayBoard();
-    getchar();
-    return 0;
+int inBoard(int r, int c) {
+    return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
 }
+
+int countOneSide(int board[SIZE][SIZE], int dr, int dc) {
+    int count = 0;
+
+    row += dr;
+    col += dc;
+
+    while (inBoard(row, col) && board[row][col] == currentPlayer) {
+        count++;
+        row += dr;
+        col += dc;
+    }
+	return count;
+}
+
+int countLine(int board[SIZE][SIZE], int dr, int dc) {
+    return 1+countOneSide(board, dr, dc)+countOneSide(board, -dr, -dc);
+}
+
+int win(int board[SIZE][SIZE]) {
+    int dirs[4][2] = {
+        {0, 1},   // col
+        {1, 0},   // row
+        {1, 1},   // duijiao
+        {-1, 1}   
+    };
+    for (int i = 0; i < 4; i++) {
+        int count = countLine(board, dirs[i][0],dirs[i][1]);
+        if (currentPlayer == 1 && count == 5) return 1;   
+		else if (count >= 5) return 1;  
+    }
+	return 0;
+}
+
+int longf(int board[SIZE][SIZE]){
+	int dirs[4][2] = {
+        {0, 1},   // col
+        {1, 0},   // row
+        {1, 1},   // duijiao
+        {-1, 1}   
+    };
+    for (int i = 0; i < 4; i++) {
+        int count = countLine(board, dirs[i][0],dirs[i][1]);
+        if (count > 5) {
+            printf("Attention long forbidden rules! Please input again.\n");
+            return 1;
+        } 
+	}
+	return 0;
+}
+
+
+int df(int board[SIZE][SIZE]){
+	
+}
+
+
+int dth(int board[SIZE][SIZE]){
+	return 0;
+}
+
+int forbiden(int board[SIZE][SIZE]){
+	// 形成禁手为1，合法则为0
+	if (longf(board)==0 && df(board) == 0 && dth(board) == 0) return 0;
+	return 1;
+}
+
+int isValidInput(int row, int col){
+	if (row < 0 || row >= SIZE || col < 0 || col >= SIZE) {
+        printf("Invalid place! Please input again.\n");
+		return 1;
+	}
+	else if (arrayForInnerBoardLayout[row][col] != 0){
+		printf("This place already has a piece.\n");
+		return 1;
+	}
+	return 0;
+	// 0是可以被接受的
+}
+
+void changePlayer(void) {
+    if (currentPlayer == 1) {
+        currentPlayer = 2;
+    } else {
+        currentPlayer = 1;
+    }
+}
+
+
+int main()
+{
+	initRecordBorard();
+
+	while(1){
+	innerLayoutToDisplayArray();
+	displayBoard();
+	
+	input();
+
+	if (isValidInput(row, col) == 1)  continue;
+	
+	arrayForInnerBoardLayout[row][col] = currentPlayer;
+	if (win(arrayForInnerBoardLayout) == 1) {
+		printf("player%i wins!", currentPlayer);
+		return 0;
+	}
+	if (currentPlayer == 1 && forbiden(arrayForInnerBoardLayout) == 1){
+		arrayForInnerBoardLayout[row][col] = 0;
+		continue;
+		}
+		changePlayer(); 
+	}
+
+	return 0;
+}
+
+
 
 //初始化一个空棋盘格局 
 void initRecordBorard(void){
@@ -100,10 +199,12 @@ void innerLayoutToDisplayArray(void){
 //第二步：扫描arrayForInnerBoardLayout，当遇到非0的元素，将+或者*复制到arrayForDisplayBoard的相应位置上
     for (int i = 0; i < SIZE; i++){
 		for (int j = 0; j < SIZE; j++){
-			if (arrayForInnerBoardLayout[i][j] == 1) arrayForDisplayBoard[i][2*j] = '+';
-			else if (arrayForInnerBoardLayout[i][j] == 2) arrayForDisplayBoard[i][2*j] = '*';
+			if (arrayForInnerBoardLayout[i][j] == 1) arrayForDisplayBoard[i][2*j] = play1Pic;//黑棋子;
+			else if (arrayForInnerBoardLayout[i][j] == 2) arrayForDisplayBoard[i][2*j] = play2Pic;
 		}
 	}
+	if (currentPlayer == 1) arrayForDisplayBoard[row][2*col] = play1CurrentPic;
+	else if (currentPlayer == 2) arrayForDisplayBoard[row][2*col] = play2CurrentPic;
 }
 
 
@@ -126,5 +227,3 @@ void displayBoard(void){
         }
 	}
 } 
-
-
