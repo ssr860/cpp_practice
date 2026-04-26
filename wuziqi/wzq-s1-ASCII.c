@@ -55,25 +55,50 @@ int inBoard(int r, int c) {
     return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
 }
 
-int countOneSide(int board[SIZE][SIZE], int dr, int dc) {
+int countOneSide(int board[SIZE][SIZE], int start_r, int start_c, int dr, int dc, int player) {
     int count = 0;
+    int cur_r = start_r + dr;
+    int cur_c = start_c + dc;
 
-    row += dr;
-    col += dc;
-
-    while (inBoard(row, col) && board[row][col] == currentPlayer) {
+    while (inBoard(cur_r, cur_c) && board[cur_r][cur_c] == player) {
         count++;
-        row += dr;
-        col += dc;
+        cur_r += dr;
+        cur_c += dc;
     }
 	return count;
 }
 
-int countLine(int board[SIZE][SIZE], int dr, int dc) {
-    return 1+countOneSide(board, dr, dc)+countOneSide(board, -dr, -dc);
+int countLine(int board[SIZE][SIZE], int check_r, int check_c, int dr, int dc, int player) {
+    return 1
+        + countOneSide(board, check_r, check_c, dr, dc, player)
+        + countOneSide(board, check_r, check_c, -dr, -dc, player);
 }
 
-int win(int board[SIZE][SIZE]) {
+int isExactFiveInDirection(int board[SIZE][SIZE], int check_r, int check_c, int dr, int dc, int player) {
+    return countLine(board, check_r, check_c, dr, dc, player) == 5;
+}
+
+int isExactFiveIncludeMove(int board[SIZE][SIZE], int cur_r, int cur_c, int move_r, int move_c, int dr, int dc, int player) {
+    int count1 = countOneSide(board, cur_r, cur_c, dr, dc, player);
+    int count2 = countOneSide(board, cur_r, cur_c, -dr, -dc, player);
+
+    if (count1 + count2 + 1 != 5) {
+        return 0;
+    }
+
+    for (int k = -count2; k <= count1; k++) {
+        int r = cur_r + k * dr;
+        int c = cur_c + k * dc;
+
+        if (r == move_r && c == move_c) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int win(int board[SIZE][SIZE], int check_r, int check_c, int player) {
     int dirs[4][2] = {
         {0, 1},   // col
         {1, 0},   // row
@@ -81,14 +106,14 @@ int win(int board[SIZE][SIZE]) {
         {-1, 1}   
     };
     for (int i = 0; i < 4; i++) {
-        int count = countLine(board, dirs[i][0],dirs[i][1]);
-        if (currentPlayer == 1 && count == 5) return 1;   
-		else if (count >= 5) return 1;  
+        int count = countLine(board, check_r, check_c, dirs[i][0], dirs[i][1], player);
+        if (player == 1 && count == 5) return 1;
+		else if (player == 2 && count >= 5) return 1;
     }
 	return 0;
 }
 
-int longf(int board[SIZE][SIZE]){
+int longf(int board[SIZE][SIZE], int check_r, int check_c, int player){
 	int dirs[4][2] = {
         {0, 1},   // col
         {1, 0},   // row
@@ -96,7 +121,7 @@ int longf(int board[SIZE][SIZE]){
         {-1, 1}   
     };
     for (int i = 0; i < 4; i++) {
-        int count = countLine(board, dirs[i][0],dirs[i][1]);
+        int count = countLine(board, check_r, check_c, dirs[i][0], dirs[i][1], player);
         if (count > 5) {
             printf("Attention long forbidden rules! Please input again.\n");
             return 1;
@@ -106,18 +131,49 @@ int longf(int board[SIZE][SIZE]){
 }
 
 
-int df(int board[SIZE][SIZE]){
-	
-}
+int hasFourInDirection(int board[SIZE][SIZE], int move_r, int move_c, int dr, int dc) {
+	for (int k = -4; k <= 4; k++) {
+		int cur_r = move_r + k * dr;
+		int cur_c = move_c + k * dc;
 
-
-int dth(int board[SIZE][SIZE]){
+		if (inBoard(cur_r, cur_c)) {
+			if (board[cur_r][cur_c] == 0){
+				board[cur_r][cur_c] = 1;
+				if (isExactFiveIncludeMove(board, cur_r, cur_c, move_r, move_c, dr, dc, 1)) {
+					board[cur_r][cur_c] = 0;
+					return 1;
+				}
+				board[cur_r][cur_c] = 0;
+			}
+		}	
+	}
 	return 0;
 }
 
-int forbiden(int board[SIZE][SIZE]){
+int df(int board[SIZE][SIZE], int move_r, int move_c){
+	int dirs[4][2] = {{0,1}, {1,0}, {1,1}, {-1,1}};
+	int count = 0;
+	for (int i = 0; i < 4; i++) {
+		if (hasFourInDirection(board, move_r, move_c, dirs[i][0], dirs[i][1])) {
+			count++;
+		}
+	}
+	if (count >= 2) {
+		printf("Attention double-four forbidden rules! Please input again.\n");
+		return 1;
+	}
+	return 0;
+}
+
+
+int dth(int board[SIZE][SIZE], int move_r, int move_c){
+	return 0;
+}
+
+int forbiden(int board[SIZE][SIZE], int move_r, int move_c, int player){
 	// 形成禁手为1，合法则为0
-	if (longf(board)==0 && df(board) == 0 && dth(board) == 0) return 0;
+	if (player != 1) return 0;
+	if (longf(board, move_r, move_c, player)==0 && df(board, move_r, move_c) == 0 && dth(board, move_r, move_c) == 0) return 0;
 	return 1;
 }
 
@@ -156,11 +212,11 @@ int main()
 	if (isValidInput(row, col) == 1)  continue;
 	
 	arrayForInnerBoardLayout[row][col] = currentPlayer;
-	if (win(arrayForInnerBoardLayout) == 1) {
+	if (win(arrayForInnerBoardLayout, row, col, currentPlayer) == 1) {
 		printf("player%i wins!", currentPlayer);
 		return 0;
 	}
-	if (currentPlayer == 1 && forbiden(arrayForInnerBoardLayout) == 1){
+	if (forbiden(arrayForInnerBoardLayout, row, col, currentPlayer) == 1){
 		arrayForInnerBoardLayout[row][col] = 0;
 		continue;
 		}
@@ -188,13 +244,12 @@ void innerLayoutToDisplayArray(void){
 //第一步：将arrayForEmptyBoard中记录的空棋盘，复制到arrayForDisplayBoard中
     for (int i = 0; i < SIZE; i++){
 		for (int j = 0; j < SIZE; j++){
-			if (j == SIZE-1){
-				arrayForDisplayBoard[i][2*j] = '.';
-				arrayForDisplayBoard[i][2*j] = '\0';
-			} 
 			arrayForDisplayBoard[i][2*j] = '.';
-			arrayForDisplayBoard[i][2*j+1] = ' ';
+			if (j < SIZE - 1) {
+				arrayForDisplayBoard[i][2*j+1] = ' ';
+			}
 		}
+		arrayForDisplayBoard[i][SIZE * CHARSIZE - 1] = '\0';
 	}
 //第二步：扫描arrayForInnerBoardLayout，当遇到非0的元素，将+或者*复制到arrayForDisplayBoard的相应位置上
     for (int i = 0; i < SIZE; i++){
@@ -203,8 +258,10 @@ void innerLayoutToDisplayArray(void){
 			else if (arrayForInnerBoardLayout[i][j] == 2) arrayForDisplayBoard[i][2*j] = play2Pic;
 		}
 	}
-	if (currentPlayer == 1) arrayForDisplayBoard[row][2*col] = play1CurrentPic;
-	else if (currentPlayer == 2) arrayForDisplayBoard[row][2*col] = play2CurrentPic;
+	if (inBoard(row, col) && arrayForInnerBoardLayout[row][col] == 0) {
+		if (currentPlayer == 1) arrayForDisplayBoard[row][2*col] = play1CurrentPic;
+		else if (currentPlayer == 2) arrayForDisplayBoard[row][2*col] = play2CurrentPic;
+	}
 }
 
 
