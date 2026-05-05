@@ -63,15 +63,15 @@ FILE *logFile = NULL;
 int playerType[3] = {0, HUMAN, AI};
 
 int weights[FEATURE_COUNT] = {
-	80065,    // features[0]: 成五
-	-183603,  // features[1]: 长连，黑棋会被跳过，保留作惩罚项
-	10793,    // features[2]: 活四
-	1842,     // features[3]: 冲四
-	2212,     // features[4]: 活三
-	233,      // features[5]: 眠三
+	65976,    // features[0]: 成五
+	-155220,  // features[1]: 长连，黑棋会被跳过，保留作惩罚项
+	10494,    // features[2]: 活四
+	1763,     // features[3]: 冲四
+	1988,     // features[4]: 活三
+	249,      // features[5]: 眠三
 	31,       // features[6]: 活二
-	59258,    // features[7]: 阻止对方成五
-	6324,     // features[8]: 阻止对方的四
+	69389,    // features[7]: 阻止对方成五
+	6392,     // features[8]: 阻止对方的四
 	10        // features[9]: 靠近中心
 };
 
