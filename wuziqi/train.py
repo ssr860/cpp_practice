@@ -291,7 +291,7 @@ def ai_move(board, player, weights, random_rate=0.03):
     return random.choice(best_points) if best_points else (SIZE // 2, SIZE // 2)
 
 
-def play_game(black_weights, white_weights, max_steps=225, random_rate=0.03):
+def play_game(black_weights, white_weights, max_steps=180, random_rate=0.03):
     FORBIDDEN_CACHE.clear()
     board = [[EMPTY for _ in range(SIZE)] for _ in range(SIZE)]
     player = BLACK
@@ -301,15 +301,39 @@ def play_game(black_weights, white_weights, max_steps=225, random_rate=0.03):
         weights = black_weights if player == BLACK else white_weights
         r, c = ai_move(board, player, weights, random_rate=random_rate)
         if board[r][c] != EMPTY:
-            return opponent(player)
+            return {
+                "winner": opponent(player),
+                "steps": step + 1,
+                "reason": "invalid_move",
+                "board": board,
+                "next_player": player,
+            }
         board[r][c] = player
         last_move = (r, c)
         if win(board, r, c, player):
-            return player
+            return {
+                "winner": player,
+                "steps": step + 1,
+                "reason": "win",
+                "board": board,
+                "next_player": opponent(player),
+            }
         if player == BLACK and forbidden(board, r, c, player):
-            return WHITE
+            return {
+                "winner": WHITE,
+                "steps": step + 1,
+                "reason": "forbidden",
+                "board": board,
+                "next_player": WHITE,
+            }
         player = opponent(player)
-    return 0 if last_move else WHITE
+    return {
+        "winner": 0 if last_move else WHITE,
+        "steps": max_steps,
+        "reason": "draw" if last_move else "no_move",
+        "board": board,
+        "next_player": player,
+    }
 
 
 # 随机扰动
@@ -328,21 +352,66 @@ def mutate(weights, scale):
     return new_weights
 
 
-# 新参数和原来的最佳参数各用黑白棋走一轮得出新参数的score
-def score_weights(weights, baseline, games, random_rate):
+def best_available_score(board, player, weights):
+    best = -10**12
+    for r, c in candidate_points(board):
+        score = evaluate_point(board, r, c, player, weights)
+        if score > best:
+            best = score
+    return best if best > -10**11 else -10**11
+
+
+def draw_tiebreak(result, candidate_player, candidate_weights, baseline_weights):
+    board = result["board"]
+    opponent_player = opponent(candidate_player)
+    candidate_best = best_available_score(board, candidate_player, candidate_weights)
+    baseline_best = best_available_score(board, opponent_player, baseline_weights)
+    raw = int((candidate_best - baseline_best) / 5000)
+    return max(-80, min(80, raw))
+
+
+def result_score(result, candidate_player, candidate_weights, baseline_weights, max_steps):
+    winner = result["winner"]
+    steps = result["steps"]
+    speed_bonus = max_steps - steps
+
+    if winner == candidate_player:
+        return 1000 + speed_bonus * 4
+    if winner == opponent(candidate_player):
+        return -1000 - speed_bonus * 4
+    return draw_tiebreak(result, candidate_player, candidate_weights, baseline_weights)
+
+
+def empty_stats():
+    return {"wins": 0, "losses": 0, "draws": 0, "steps": 0}
+
+
+def update_stats(stats, result, candidate_player):
+    if result["winner"] == candidate_player:
+        stats["wins"] += 1
+    elif result["winner"] == opponent(candidate_player):
+        stats["losses"] += 1
+    else:
+        stats["draws"] += 1
+    stats["steps"] += result["steps"]
+
+
+# 新参数和原来的最佳参数各执黑白对战；胜负为主，胜利越快/失败越晚区分越大。
+def score_weights(weights, baseline, games, random_rate, max_steps):
     score = 0
+    stats = empty_stats()
     for _ in range(games):
-        result = play_game(weights, baseline, random_rate=random_rate)
-        if result == BLACK:
-            score += 1
-        elif result == WHITE:
-            score -= 1
-        result = play_game(baseline, weights, random_rate=random_rate)
-        if result == WHITE:
-            score += 1
-        elif result == BLACK:
-            score -= 1
-    return score
+        result = play_game(weights, baseline, max_steps=max_steps, random_rate=random_rate)
+        score += result_score(result, BLACK, weights, baseline, max_steps)
+        update_stats(stats, result, BLACK)
+
+        result = play_game(baseline, weights, max_steps=max_steps, random_rate=random_rate)
+        score += result_score(result, WHITE, weights, baseline, max_steps)
+        update_stats(stats, result, WHITE)
+
+    total_games = max(1, games * 2)
+    stats["avg_steps"] = round(stats["steps"] / total_games, 2)
+    return score, stats
 
 # 有记忆训练
 def load_history(out_dir):
@@ -353,13 +422,14 @@ def load_history(out_dir):
 
 
 # 自博弈 + 随机变异搜索
-def train(generations, population_size, games, seed, out_dir, resume=False, random_rate=0.03):
+def train(generations, population_size, games, seed, out_dir, resume=False, random_rate=0.03, max_steps=180):
 # generations      训练多少代
 # population_size  每一代生成多少组候选参数
 # games            每组候选和基准参数对战多少轮
 # out_dir          输出目录
 # resume           是否从已有训练记录继续训练
 # random_rate      AI 随机下棋概率
+# max_steps        单局最多走多少步，避免训练局拖太久
     random.seed(seed)
     best = BASE_WEIGHTS[:]
     history = load_history(out_dir) if resume else []
@@ -387,13 +457,20 @@ def train(generations, population_size, games, seed, out_dir, resume=False, rand
         scored = []
         for weights in population:
             # 保存形式（score，参数）
-            scored.append((score_weights(weights, best, games, random_rate), weights))
+            score, stats = score_weights(weights, best, games, random_rate, max_steps)
+            scored.append((score, stats, weights))
         scored.sort(key=lambda item: item[0], reverse=True)
-        best_score, best = scored[0]
+        best_score, best_stats, best = scored[0]
         # 写进weights.txt 和 training_log.json
-        history.append({"generation": gen, "score": best_score, "weights": best})
+        history.append({"generation": gen, "score": best_score, "stats": best_stats, "weights": best})
         write_outputs(best, history, out_dir)
-        print(f"generation {gen:03d}: score={best_score:4d}, weights={best}", flush=True)
+        print(
+            f"generation {gen:03d}: score={best_score:5d}, "
+            f"wins={best_stats['wins']}, losses={best_stats['losses']}, "
+            f"draws={best_stats['draws']}, avg_steps={best_stats['avg_steps']}, "
+            f"weights={best}",
+            flush=True,
+        )
 
     return best, history
 
@@ -424,6 +501,7 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--random-rate", type=float, default=0.03)
     parser.add_argument("--forbidden-depth", type=int, default=1)
+    parser.add_argument("--max-steps", type=int, default=180)
     args = parser.parse_args()
     MAX_FORBIDDEN_DEPTH = max(0, args.forbidden_depth)
 
@@ -435,6 +513,7 @@ def main():
         args.out,
         resume=args.resume,
         random_rate=args.random_rate,
+        max_steps=args.max_steps,
     )
     write_outputs(best, history, args.out)
     print("\nbest weights:")

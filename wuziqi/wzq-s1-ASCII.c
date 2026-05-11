@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #define SIZE 15
 #define CHARSIZE 2
@@ -16,11 +17,12 @@
 void initRecordBorard(void);
 void innerLayoutToDisplayArray(void);
 void displayBoard(void);
-void input(void);
+int input(void);
 int inBoard(int r, int c);
 int isValidInput(int row, int col);
 void changePlayer(void);
 int win(int board[SIZE][SIZE], int check_r, int check_c, int player);
+int getWinningLine(int board[SIZE][SIZE], int check_r, int check_c, int player, int line[SIZE][2]);
 int forbiden(int board[SIZE][SIZE], int move_r, int move_c, int player);
 int forbidenWithDepth(int board[SIZE][SIZE], int move_r, int move_c, int player, int depth);
 int isLegalBlackMove(int board[SIZE][SIZE], int move_r, int move_c, int depth);
@@ -34,6 +36,11 @@ void closeGameLog(void);
 void logMove(int moveNumber, int player, int move_r, int move_c, const char *source);
 void logForbiddenMove(int player, int move_r, int move_c, const char *source);
 void logResult(const char *result);
+void coordName(int r, int c, char out[8]);
+int parseMoveText(const char *text, int *out_r, int *out_c);
+void rememberMove(int player, int move_r, int move_c, const char *source);
+int isWinningLineCell(int r, int c);
+void printWinningLine(void);
 
 char arrayForDisplayBoard[SIZE][SIZE * CHARSIZE + 1];
 
@@ -57,22 +64,29 @@ int currentPlayer = BLACK;
 int row = 7;
 int col = 7;
 int clearScreen = 1;
+int lastMoveRow = -1;
+int lastMoveCol = -1;
+int lastMovePlayer = EMPTY;
+int winningLine[SIZE][2];
+int winningLineCount = 0;
+char statusMessage[256] = "";
+char lastMoveMessage[256] = "";
 char logPath[260] = "game_log.txt";
 FILE *logFile = NULL;
 
 int playerType[3] = {0, HUMAN, AI};
 
 int weights[FEATURE_COUNT] = {
-	65976,    // features[0]: 成五
-	-155220,  // features[1]: 长连，黑棋会被跳过，保留作惩罚项
-	10494,    // features[2]: 活四
-	1763,     // features[3]: 冲四
-	1988,     // features[4]: 活三
-	249,      // features[5]: 眠三
-	31,       // features[6]: 活二
-	69389,    // features[7]: 阻止对方成五
-	6392,     // features[8]: 阻止对方的四
-	10        // features[9]: 靠近中心
+	138381,   // features[0]: 成五
+	-66933,   // features[1]: 长连，黑棋会被跳过，保留作惩罚项
+	6693,     // features[2]: 活四
+	2685,     // features[3]: 冲四
+	2240,     // features[4]: 活三
+	89,       // features[5]: 眠三
+	23,       // features[6]: 活二
+	54497,    // features[7]: 阻止对方成五
+	6029,     // features[8]: 阻止对方的四
+	6         // features[9]: 靠近中心
 };
 
 // 换对手
@@ -86,12 +100,83 @@ int inBoard(int r, int c) {
 	return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
 }
 
+void coordName(int r, int c, char out[8]) {
+	snprintf(out, 8, "%c%d", 'A' + c, SIZE - r);
+}
+
+int parseMoveText(const char *text, int *out_r, int *out_c) {
+	const char *p = text;
+	while (*p != '\0' && isspace((unsigned char)*p)) {
+		p++;
+	}
+
+	if (*p == '\0') {
+		return 0;
+	}
+
+	if (isalpha((unsigned char)*p)) {
+		char colChar = (char)toupper((unsigned char)*p);
+		int number;
+		p++;
+		while (*p != '\0' && isspace((unsigned char)*p)) {
+			p++;
+		}
+		if (sscanf(p, "%d", &number) != 1) {
+			return 0;
+		}
+		*out_c = colChar - 'A';
+		*out_r = SIZE - number;
+		return 1;
+	}
+
+	if (isdigit((unsigned char)*p)) {
+		int rowNumber;
+		int colNumber;
+		if (sscanf(p, "%d %d", &rowNumber, &colNumber) != 2) {
+			return 0;
+		}
+		*out_r = SIZE - rowNumber;
+		*out_c = colNumber - 1;
+		return 1;
+	}
+
+	return 0;
+}
+
 // 用户输入
-void input(void) {
-	printf("Player%i input row col: ", currentPlayer);
-	scanf("%d %d", &row, &col);
-	row--;
-	col--;
+int input(void) {
+	char buffer[128];
+	char coord[8];
+
+	printf("Player%i %s input coordinate (A1-O15, example H8; type last to show last move): ",
+		currentPlayer,
+		currentPlayer == BLACK ? "BLACK" : "WHITE"
+	);
+
+	if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+		snprintf(statusMessage, sizeof(statusMessage), "Input ended.");
+		return 0;
+	}
+
+	if (strncmp(buffer, "last", 4) == 0 || strncmp(buffer, "LAST", 4) == 0) {
+		if (lastMoveRow >= 0) {
+			snprintf(statusMessage, sizeof(statusMessage), "%s", lastMoveMessage);
+		} else {
+			snprintf(statusMessage, sizeof(statusMessage), "No move has been played yet.");
+		}
+		return 0;
+	}
+
+	if (!parseMoveText(buffer, &row, &col)) {
+		snprintf(statusMessage, sizeof(statusMessage), "Invalid input format. Use A1-O15, for example H8.");
+		return 0;
+	}
+
+	if (inBoard(row, col)) {
+		coordName(row, col, coord);
+		snprintf(statusMessage, sizeof(statusMessage), "You entered %s.", coord);
+	}
+	return 1;
 }
 
 // 计算一侧的长度
@@ -150,6 +235,35 @@ int win(int board[SIZE][SIZE], int check_r, int check_c, int player) {
 		int count = countLine(board, check_r, check_c, dirs[i][0], dirs[i][1], player);
 		if (player == BLACK && count == 5) return 1;
 		if (player == WHITE && count >= 5) return 1;
+	}
+
+	return 0;
+}
+
+int getWinningLine(int board[SIZE][SIZE], int check_r, int check_c, int player, int line[SIZE][2]) {
+	int dirs[4][2] = {
+		{0, 1},
+		{1, 0},
+		{1, 1},
+		{-1, 1}
+	};
+
+	for (int i = 0; i < 4; i++) {
+		int dr = dirs[i][0];
+		int dc = dirs[i][1];
+		int count1 = countOneSide(board, check_r, check_c, dr, dc, player);
+		int count2 = countOneSide(board, check_r, check_c, -dr, -dc, player);
+		int total = count1 + count2 + 1;
+
+		if ((player == BLACK && total == 5) || (player == WHITE && total >= 5)) {
+			int idx = 0;
+			for (int k = -count2; k <= count1 && idx < SIZE; k++) {
+				line[idx][0] = check_r + k * dr;
+				line[idx][1] = check_c + k * dc;
+				idx++;
+			}
+			return idx;
+		}
 	}
 
 	return 0;
@@ -609,16 +723,20 @@ void getAIMove(int board[SIZE][SIZE], int player, int *best_r, int *best_c) {
 
 
 int isValidInput(int row, int col) {
+	char coord[8];
+
 	if (!inBoard(row, col)) {
-		printf("Invalid place! Please input again.\n");
+		snprintf(statusMessage, sizeof(statusMessage), "Invalid place. Columns are A-O and rows are 1-15.");
 		return 1;
 	}
 
 	if (arrayForInnerBoardLayout[row][col] != EMPTY) {
-		printf("This place already has a piece.\n");
+		coordName(row, col, coord);
+		snprintf(statusMessage, sizeof(statusMessage), "%s already has a piece. Please choose another point.", coord);
 		return 1;
 	}
 
+	statusMessage[0] = '\0';
 	return 0;
 }
 
@@ -636,9 +754,10 @@ int isBoardFull(int board[SIZE][SIZE]) {
 }
 
 void printUsage(const char *programName) {
-	printf("Usage: %s [--mode 1|2] [--log FILE] [--no-clear] [--max-moves N]\n", programName);
+	printf("Usage: %s [--mode 1|2|3] [--log FILE] [--no-clear] [--max-moves N]\n", programName);
 	printf("  --mode 1      Human(BLACK) vs AI(WHITE)\n");
 	printf("  --mode 2      AI vs AI\n");
+	printf("  --mode 3      AI(BLACK) vs Human(WHITE)\n");
 	printf("  --log FILE    Write every accepted move and board to FILE\n");
 	printf("  --no-clear    Keep board history visible in the terminal\n");
 	printf("  --max-moves N Stop after N accepted moves if nobody wins\n");
@@ -669,7 +788,7 @@ void parseArguments(int argc, char *argv[], int *mode, int *modeProvided, int *m
 		}
 	}
 
-	if (*mode != 1 && *mode != 2) {
+	if (*mode != 1 && *mode != 2 && *mode != 3) {
 		*mode = 1;
 	}
 }
@@ -698,17 +817,70 @@ void closeGameLog(void) {
 	}
 }
 
+int isWinningLineCell(int r, int c) {
+	for (int i = 0; i < winningLineCount; i++) {
+		if (winningLine[i][0] == r && winningLine[i][1] == c) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+void rememberMove(int player, int move_r, int move_c, const char *source) {
+	char coord[8];
+
+	lastMoveRow = move_r;
+	lastMoveCol = move_c;
+	lastMovePlayer = player;
+	coordName(move_r, move_c, coord);
+	snprintf(
+		lastMoveMessage,
+		sizeof(lastMoveMessage),
+		"Last move: Player%d %s at %s by %s.",
+		player,
+		player == BLACK ? "BLACK" : "WHITE",
+		coord,
+		source
+	);
+}
+
+void printWinningLine(void) {
+	char coord[8];
+
+	if (winningLineCount <= 0) {
+		return;
+	}
+
+	printf("Winning line:");
+	for (int i = 0; i < winningLineCount; i++) {
+		coordName(winningLine[i][0], winningLine[i][1], coord);
+		printf(" %s", coord);
+	}
+	printf("\n");
+
+	if (logFile != NULL) {
+		fprintf(logFile, "Winning line:");
+		for (int i = 0; i < winningLineCount; i++) {
+			coordName(winningLine[i][0], winningLine[i][1], coord);
+			fprintf(logFile, " %s", coord);
+		}
+		fprintf(logFile, "\n");
+		fflush(logFile);
+	}
+}
+
 void logBoard(void) {
 	if (logFile == NULL) return;
 
-	fprintf(logFile, "   ");
+	fprintf(logFile, "    ");
 	for (int j = 0; j < SIZE; j++) {
-		fprintf(logFile, " %2d", j + 1);
+		fprintf(logFile, "  %c", 'A' + j);
 	}
 	fprintf(logFile, "\n");
 
 	for (int i = 0; i < SIZE; i++) {
-		fprintf(logFile, "%2d ", i + 1);
+		int label = SIZE - i;
+		fprintf(logFile, "%2d ", label);
 		for (int j = 0; j < SIZE; j++) {
 			char ch = '.';
 			if (arrayForInnerBoardLayout[i][j] == BLACK) {
@@ -716,24 +888,33 @@ void logBoard(void) {
 			} else if (arrayForInnerBoardLayout[i][j] == WHITE) {
 				ch = play2Pic;
 			}
+			if ((i == lastMoveRow && j == lastMoveCol) || isWinningLineCell(i, j)) {
+				ch = (char)toupper((unsigned char)ch);
+			}
 			fprintf(logFile, "  %c", ch);
 		}
-		fprintf(logFile, "\n");
+		fprintf(logFile, " %2d\n", label);
 	}
-	fprintf(logFile, "\n");
+
+	fprintf(logFile, "    ");
+	for (int j = 0; j < SIZE; j++) {
+		fprintf(logFile, "  %c", 'A' + j);
+	}
+	fprintf(logFile, "\n\n");
 }
 
 void logMove(int moveNumber, int player, int move_r, int move_c, const char *source) {
+	char coord[8];
 	if (logFile == NULL) return;
 
+	coordName(move_r, move_c, coord);
 	fprintf(
 		logFile,
-		"Move %03d: Player%d %s row=%d col=%d source=%s\n",
+		"Move %03d: Player%d %s coord=%s source=%s\n",
 		moveNumber,
 		player,
 		player == BLACK ? "BLACK" : "WHITE",
-		move_r + 1,
-		move_c + 1,
+		coord,
 		source
 	);
 	logBoard();
@@ -741,15 +922,16 @@ void logMove(int moveNumber, int player, int move_r, int move_c, const char *sou
 }
 
 void logForbiddenMove(int player, int move_r, int move_c, const char *source) {
+	char coord[8];
 	if (logFile == NULL) return;
 
+	coordName(move_r, move_c, coord);
 	fprintf(
 		logFile,
-		"Rejected forbidden move: Player%d %s row=%d col=%d source=%s\n\n",
+		"Rejected forbidden move: Player%d %s coord=%s source=%s\n\n",
 		player,
 		player == BLACK ? "BLACK" : "WHITE",
-		move_r + 1,
-		move_c + 1,
+		coord,
 		source
 	);
 	fflush(logFile);
@@ -773,15 +955,21 @@ int main(int argc, char *argv[]) {
 	openGameLog();
 
 	if (!modeProvided) {
-		printf("Choose mode: 1 Human(BLACK) vs AI(WHITE), 2 AI vs AI: ");
+		printf("Choose mode: 1 Human(BLACK) vs AI(WHITE), 2 AI vs AI, 3 AI(BLACK) vs Human(WHITE): ");
 		if (scanf("%d", &mode) != 1) {
 			mode = 1;
+		}
+		int ch;
+		while ((ch = getchar()) != '\n' && ch != EOF) {
 		}
 	}
 
 	if (mode == 2) {
 		playerType[BLACK] = AI;
 		playerType[WHITE] = AI;
+	} else if (mode == 3) {
+		playerType[BLACK] = AI;
+		playerType[WHITE] = HUMAN;
 	} else {
 		playerType[BLACK] = HUMAN;
 		playerType[WHITE] = AI;
@@ -798,15 +986,18 @@ int main(int argc, char *argv[]) {
 		displayBoard();
 
 		if (playerType[currentPlayer] == AI) {
+			char coord[8];
 			getAIMove(arrayForInnerBoardLayout, currentPlayer, &row, &col);
-			printf("AI Player%i: %d %d\n", currentPlayer, row + 1, col + 1);
+			coordName(row, col, coord);
+			printf("AI Player%i %s: %s\n", currentPlayer, currentPlayer == BLACK ? "BLACK" : "WHITE", coord);
 		} else {
-			input();
+			if (!input()) continue;
 			if (isValidInput(row, col) == 1) continue;
 		}
 
 		if (arrayForInnerBoardLayout[row][col] != EMPTY) {
-			printf("No valid move found.\n");
+			snprintf(statusMessage, sizeof(statusMessage), "No valid move found.");
+			printf("%s\n", statusMessage);
 			logResult("No valid move found");
 			closeGameLog();
 			return 0;
@@ -815,26 +1006,35 @@ int main(int argc, char *argv[]) {
 		arrayForInnerBoardLayout[row][col] = currentPlayer;
 
 		if (win(arrayForInnerBoardLayout, row, col, currentPlayer) == 1) {
+			const char *source = playerType[currentPlayer] == AI ? "AI" : "HUMAN";
 			moveNumber++;
-			logMove(moveNumber, currentPlayer, row, col, playerType[currentPlayer] == AI ? "AI" : "HUMAN");
+			rememberMove(currentPlayer, row, col, source);
+			winningLineCount = getWinningLine(arrayForInnerBoardLayout, row, col, currentPlayer, winningLine);
+			logMove(moveNumber, currentPlayer, row, col, source);
 			innerLayoutToDisplayArray();
 			displayBoard();
 			printf("Player%i wins!\n", currentPlayer);
+			printWinningLine();
 			logResult(currentPlayer == BLACK ? "BLACK wins!" : "WHITE wins!");
 			closeGameLog();
 			return 0;
 		}
 
 		if (forbiden(arrayForInnerBoardLayout, row, col, currentPlayer) == 1) {
+			char coord[8];
 			arrayForInnerBoardLayout[row][col] = EMPTY;
 			logForbiddenMove(currentPlayer, row, col, playerType[currentPlayer] == AI ? "AI" : "HUMAN");
+			coordName(row, col, coord);
 			if (playerType[currentPlayer] == HUMAN) {
-				printf("Attention forbidden rules! Please input again.\n");
+				snprintf(statusMessage, sizeof(statusMessage), "%s is a forbidden move for BLACK. Please input again.", coord);
+			} else {
+				snprintf(statusMessage, sizeof(statusMessage), "AI selected forbidden move %s; retrying.", coord);
 			}
 			continue;
 		}
 
 		moveNumber++;
+		rememberMove(currentPlayer, row, col, playerType[currentPlayer] == AI ? "AI" : "HUMAN");
 		logMove(moveNumber, currentPlayer, row, col, playerType[currentPlayer] == AI ? "AI" : "HUMAN");
 
 		if (isBoardFull(arrayForInnerBoardLayout)) {
@@ -883,6 +1083,9 @@ void innerLayoutToDisplayArray(void) {
 			} else if (arrayForInnerBoardLayout[i][j] == WHITE) {
 				arrayForDisplayBoard[i][2 * j] = play2Pic;
 			}
+			if ((i == lastMoveRow && j == lastMoveCol) || isWinningLineCell(i, j)) {
+				arrayForDisplayBoard[i][2 * j] = (char)toupper((unsigned char)arrayForDisplayBoard[i][2 * j]);
+			}
 		}
 	}
 
@@ -900,17 +1103,31 @@ void displayBoard(void) {
 		system("cls");
 	}
 
-	printf("   ");
+	printf("    ");
 	for (int j = 0; j < SIZE; j++) {
-		printf(" %2d", j + 1);
+		printf("  %c", 'A' + j);
 	}
 	printf("\n");
 
 	for (int i = 0; i < SIZE; i++) {
-		printf("%2d ", i + 1);
+		int label = SIZE - i;
+		printf("%2d ", label);
 		for (int j = 0; j < SIZE; j++) {
 			printf("  %c", arrayForDisplayBoard[i][2 * j]);
 		}
-		printf("\n");
+		printf(" %2d\n", label);
+	}
+
+	printf("    ");
+	for (int j = 0; j < SIZE; j++) {
+		printf("  %c", 'A' + j);
+	}
+	printf("\n");
+
+	if (lastMoveMessage[0] != '\0') {
+		printf("%s\n", lastMoveMessage);
+	}
+	if (statusMessage[0] != '\0') {
+		printf("%s\n", statusMessage);
 	}
 }
